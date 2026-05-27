@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>firebox-pypi-index</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+code { background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.95em; }
+pre  { background: #f4f4f4; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+a    { color: #0366d6; }
+small{ color: #586069; }
+hr   { border: none; border-top: 1px solid #e1e4e8; margin: 2rem 0; }
+</style>
+</head>
+<body>
+<h1>firebox-pypi-index</h1>
+<p>PyPI-compatible index hosting Python wheels for <a href="https://github.com/jmfirth/firebox">firebox</a> — content-addressed wheels built against wasix-libc, served via GitHub Pages.</p>
+
+<p><strong>PEP 503 simple repo:</strong> <a href="simple/">/simple/</a></p>
+
+<h2>Usage</h2>
+<pre>pip install \
+  --index-url https://pythonindex.firebox.run/simple/ \
+  --extra-index-url https://pythonindex.wasix.org/simple/ \
+  &lt;package&gt;</pre>
+
+<p>Inside firebox, the <code>python-dev</code> image sets these as the default <code>PIP_INDEX_URL</code> + <code>PIP_EXTRA_INDEX_URL</code> so guest <code>pip install</code> JustWorks.</p>
+
+<h2>Cascade behavior</h2>
+<p>This index hosts firebox-tuned wheels — binary-extension packages built against our wasix-libc fork + any upstream overrides we maintain. For any package not hosted here, pip cascades to <a href="https://pythonindex.wasix.org/">wasix-extras</a>, which provides broad coverage of pure-Python and common binary wheels.</p>
+
+<p>Wheels here use PEP 440 local version identifiers (e.g. <code>cryptography-47.0.0+firebox.1-cp313-cp313-wasix_wasm32.whl</code>) so users requesting <code>cryptography==47.0.0</code> resolve to our build when present.</p>
+
+<h2>Architecture</h2>
+<ul>
+<li><strong>Listings:</strong> PEP 503 HTML under <code>/simple/&lt;package&gt;/</code> — committed to this repo, served by GitHub Pages</li>
+<li><strong>Wheels:</strong> stored as GitHub Releases assets (no repo-size penalty; scales indefinitely)</li>
+<li><strong>Build CI:</strong> GitHub Actions workflow that mirrors <a href="https://github.com/wasix-org/python-index">wasix-org/python-index</a>'s build pattern, swapping in our wasix-libc fork pin</li>
+<li><strong>Hosting:</strong> GitHub Pages with Fastly CDN, zero cost at scale, hard-bounded by GitHub's rate limiting</li>
+</ul>
+
+<h2>Contributing a wheel</h2>
+<p>Wheel build attempts are gated by the firebox project's CI + review process. To request a new wheel, file an issue at <a href="https://github.com/jmfirth/firebox/issues">jmfirth/firebox</a>.</p>
+
+<hr>
+<small>firebox-pypi-index — © 2026 Justin Firth. All rights reserved.</small>
+</body>
+</html>
