@@ -1,53 +1,262 @@
 name: Build and Release Wheels
 
-# Skeleton — not yet exercised. This workflow will build binary-extension
-# wheels from source against wasix-libc and attach them as GitHub Release
-# assets. The deploy-pages.yml workflow then regenerates the index to
-# include the new wheels.
+# Builds binary-extension Python wheels for firebox's wasm32-wasi runtime
+# using wasix's cross-compilation toolchain. Mirrors the approach from
+# wasix-org/build-scripts (Makefile-driven wheel builds).
 #
-# Reference: wasix-org/build-scripts (Makefile-driven wheel builds).
-# Our build will mirror their pattern:
-#   - wasixcc cross-compiler toolchain
-#   - wasi-sdk 22 sysroot
-#   - wasix-libc fork (jmfirth/wasix-libc, firebox-patches branch)
-#   - maturin for Rust-based packages (cryptography, bcrypt)
-#   - setuptools + wasixcc for C-extension packages (cffi, numpy)
+# Reference: https://github.com/wasix-org/build-scripts
+#   - Makefile lines 954-974: cryptography sysroot + wheel build rules
+#   - Makefile lines 539-552: cross-venv setup (wasixcc + maturin fork)
+#   - Makefile lines 1258-1265: openssl build for wasm32-wasi
+#   - Makefile lines 392-400: build_wheel macro
 #
-# First wheel target: cryptography 47.0.0 + cffi >= 2.0.0 (M5.2 Option D).
-# Saturday Opus ships the first build.
+# Architecture:
+#   1. Install wasixcc toolchain (curl -fsSL https://wasix.cc | sh)
+#   2. Download prebuilt openssl.tar.xz from wasix-org/build-scripts release
+#   3. Set up cross-venv with wasixcc + wasix maturin fork
+#   4. Clone upstream pyca/cryptography@<version>, apply CC patch
+#   5. Build wheel via python3 -m build with cross-compile env vars
+#   6. Create GH Release, upload wheel, update release-assets.jsonl
+#   7. Trigger deploy-pages.yml to regenerate index
+#
+# Halt-on-failure: any step failure stops the workflow. No retry-with-tweaks.
 
 on:
   workflow_dispatch:
     inputs:
       package:
-        description: 'Package to build (e.g. cryptography, cffi)'
+        description: 'Package to build (cryptography)'
         required: true
         type: string
+        default: cryptography
       version:
         description: 'Version to build (e.g. 47.0.0)'
         required: true
         type: string
+        default: '47.0.0'
 
 permissions:
   contents: write  # to create releases and upload assets
+
+env:
+  WASIXCC_VERSION: "0.4.3"
+  BUILD_SCRIPTS_RELEASE: "v0.1.0"
+  BUILD_SCRIPTS_REPO: "wasix-org/build-scripts"
+  MATURIN_FORK: "https://github.com/wasix-org/maturin.git@wasix-1.9.0"
+  PYTHON_VERSION: "3.12"
+  CARGO_BUILD_TARGET: "wasm32-wasmer-wasi-dl"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout build-scripts
+      - name: Checkout firebox-pypi-index
         uses: actions/checkout@v4
 
-      # TODO: Install wasixcc toolchain
-      # TODO: Checkout wasix-libc fork at pinned ref
-      # TODO: Build wheel via wasix-org/build-scripts Makefile pattern
-      # TODO: Create GH Release and upload wheel as asset
-      # TODO: Append entry to release-assets.jsonl
-      # TODO: Trigger deploy-pages.yml to regenerate index
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: (placeholder) Build step
+      - name: Install system dependencies
         run: |
-          echo "build-wheels.yml is scaffolded but not yet exercised."
-          echo "First wheel build: cryptography 47.0.0 + cffi >= 2.0.0 (Saturday Opus)."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl clang llvm rustup
+
+      - name: Install wasixcc toolchain
+        run: |
+          curl -fsSL https://wasix.cc | sh
+          echo "$HOME/.wasixcc/bin" >> $GITHUB_PATH
+
+      - name: Verify wasixcc
+        run: |
+          wasixcc --version
+          wasixcc -dumpmachine
+
+      - name: Setup Rust (wasix target)
+        run: |
+          rustup default stable
+          rustup target add wasm32-wasmer-wasi-dl || \
+            rustup target add wasm32-unknown-unknown
+
+      - name: Download prebuilt openssl from wasix build-scripts
+        run: |
+          mkdir -p /tmp/openssl-sysroot
+          curl -fsSL \
+            "https://github.com/${{ env.BUILD_SCRIPTS_REPO }}/releases/download/${{ env.BUILD_SCRIPTS_RELEASE }}/openssl.tar.xz" \
+            -o /tmp/openssl.tar.xz
+          tar xJf /tmp/openssl.tar.xz -C /tmp/openssl-sysroot
+          # Copy openssl wasm32-wasi libs to general lib dir (openssl-sys doesn't look in wasm32-wasi subdir)
+          if [ -d /tmp/openssl-sysroot/usr/local/lib/wasm32-wasi ]; then
+            cp -r /tmp/openssl-sysroot/usr/local/lib/wasm32-wasi/* /tmp/openssl-sysroot/usr/local/lib/
+          fi
+          echo "OPENSSL_DIR=/tmp/openssl-sysroot/usr/local" >> $GITHUB_ENV
+
+      - name: Set up cross-venv with wasixcc
+        run: |
+          python3 -m venv /tmp/native-venv
+          source /tmp/native-venv/bin/activate
+          pip install crossenv
+
+          # Create cross-venv using wasixcc as the cross compiler
+          # Note: we use the wasix sysroot from wasixcc's installation
+          WASIX_SYSROOT=$(wasixccenv print-sysroot)
+          python3 -m crossenv "${WASIX_SYSROOT}/usr/local/bin/python3.wasm" \
+            /tmp/cross-venv --cc wasixcc --cxx wasixcc++
+
+          # Install cross-build tools in cross-venv
+          source /tmp/cross-venv/bin/activate
+          PIP_EXTRA_INDEX_URL=https://pythonindex.wasix.org/simple \
+            build-pip install cffi
+
+          # Install native build tools (maturin fork must be built natively)
+          CC=/usr/bin/clang CXX=/usr/bin/clang++ LD=/usr/bin/ld AR=/usr/bin/ar AS=/usr/bin/as \
+            PIP_EXTRA_INDEX_URL=https://pythonindex.wasix.org/simple \
+            pip install build six cython setuptools==81.0.0 wheel \
+            git+https://github.com/wasix-org/maturin.git@wasix-1.9.0
+
+          # maturin.wasm is built by the cross-venv setup; copy to cross bin
+          if [ -f /tmp/cross-venv/cross/bin/maturin.wasm ]; then
+            cp /tmp/cross-venv/cross/bin/maturin.wasm /tmp/cross-venv/cross/bin/maturin
+          fi
+
+          echo "CROSS_VENV=/tmp/cross-venv" >> $GITHUB_ENV
+
+      - name: Checkout cryptography source (${{ inputs.version }})
+        run: |
+          git clone https://github.com/pyca/cryptography.git /tmp/cryptography-src
+          cd /tmp/cryptography-src
+          git checkout ${{ inputs.version }}
+
+      - name: Apply wasix CC patch
+        run: |
+          cd /tmp/cryptography-src
+          # Patch build.rs to use CC env var instead of hardcoded wasixcc
+          # This mirrors wasix-org/build-scripts/patches/cryptography-0001-*.patch
+          patch -p1 << 'PATCH_EOF'
+--- a/src/rust/cryptography-cffi/build.rs
++++ b/src/rust/cryptography-cffi/build.rs
+@@ -61,7 +61,7 @@
+
+     let mut build = cc::Build::new();
+     if std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap() == "wasmer" {
+-        build.compiler("wasixcc");
++        build.compiler(&std::env::var("CC").unwrap_or("wasixcc".to_string()));
+     }
+     build
+         .file(openssl_c)
+PATCH_EOF
+
+      - name: Build cryptography wheel
+        run: |
+          source /tmp/cross-venv/bin/activate
+
+          # Build sdist first (matches wasix build-scripts sequence)
+          cd /tmp/cryptography-src
+          python3 -m build --sdist
+          SDIST=$(ls dist/cryptography-*.tar.gz | head -1)
+          echo "sdist: $SDIST"
+
+          # Unpack sdist
+          mkdir -p /tmp/cryptography-sdist
+          tar -xzf "$SDIST" -C /tmp/cryptography-sdist --strip-components=1
+
+          # Build wheel with cross-compile env vars (mirrors Makefile lines 961-974)
+          cd /tmp/cryptography-sdist
+          WASIXCC_SYSROOT=$(wasixccenv print-sysroot) \
+          WASIXCC_WASM_EXCEPTIONS=yes \
+          WASIXCC_PIC=yes \
+          CC=wasixcc \
+          CXX=wasixcc++ \
+          CARGO_BUILD_TARGET=${{ env.CARGO_BUILD_TARGET }} \
+          OPENSSL_DIR=${{ env.OPENSSL_DIR }} \
+          PYO3_CROSS_LIB_DIR="${WASIXCC_SYSROOT}/usr/local/lib" \
+          RUSTFLAGS="-C llvm-args=-wasm-use-legacy-eh=false -C link-arg=-Bsymbolic" \
+          _PYTHON_HOST_PLATFORM="wasix_wasm32" \
+            python3 -m build --wheel
+
+          # Locate the built wheel
+          WHEEL=$(ls dist/*.whl 2>/dev/null | head -1)
+          if [ -z "$WHEEL" ]; then
+            echo "BUILD_FAILED: no .whl file produced"
+            ls -la dist/ 2>/dev/null || echo "no dist/ directory"
+            exit 1
+          fi
+          echo "WHEEL_PATH=$(realpath "$WHEEL")" >> $GITHUB_ENV
+          echo "WHEEL_FILENAME=$(basename "$WHEEL")" >> $GITHUB_ENV
+
+      - name: Verify wheel contents
+        run: |
+          python3 -c "
+import zipfile, sys
+w = '${{ env.WHEEL_PATH }}'
+with zipfile.ZipFile(w) as z:
+    names = z.namelist()
+    print('Wheel contents:')
+    for n in names:
+        print(f'  {n}')
+    # Check for native .so file
+    sos = [n for n in names if '.so' in n]
+    if not sos:
+        print('WARNING: no .so files in wheel — may be pure-Python')
+    else:
+        for so in sos:
+            data = z.read(so)
+            is_wasm = data[:4] == b'\\x00asm'
+            print(f'  {so}: {len(data)} bytes, WASM={is_wasm}')
+            if not is_wasm:
+                print(f'  ERROR: native module is not WASM format (magic: {data[:4].hex()})')
+                sys.exit(1)
+            print(f'  OK: native module is WASM format')
+"
+
+      - name: Create GitHub Release (draft)
+        run: |
+          TAG="v0.0.1-${{ inputs.package }}-${{ inputs.version }}"
+          gh release create "$TAG" \
+            --draft \
+            --title "${{ inputs.package }} ${{ inputs.version }}+firebox.1" \
+            --notes "DRAFT: ${{ inputs.package }}==${{ inputs.version }}+firebox.1 — validation pending"
+          gh release upload "$TAG" "${{ env.WHEEL_PATH }}"
+          echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Update release-assets.jsonl
+        run: |
+          SHA256=$(sha256sum "${{ env.WHEEL_PATH }}" | cut -d' ' -f1)
+          cat >> release-assets.jsonl << JSONL_EOF
+          {"filename": "${{ env.WHEEL_FILENAME }}", "sha256": "${SHA256}", "tag": "${{ env.RELEASE_TAG }}"}
+          JSONL_EOF
+          echo "Updated release-assets.jsonl with ${{ env.WHEEL_FILENAME }}"
+
+      - name: Commit release-assets.jsonl update
+        run: |
+          git config user.name "firebox-pypi-index-bot"
+          git config user.email "bot@firebox.run"
+          git add release-assets.jsonl
+          git commit -m "feat: add ${{ inputs.package }}==${{ inputs.version }}+firebox.1 wheel
+
+          Build via wasixcc cross-compilation. Wheel stored as GH Release asset.
+          release-assets.jsonl updated for index regeneration.
+
+          Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+          git push origin HEAD
+
+      - name: Trigger deploy-pages.yml
+        run: |
+          gh workflow run deploy-pages.yml --ref main
+          echo "deploy-pages.yml triggered — index will regenerate with new wheel entry"
+
+      - name: Print summary
+        run: |
+          echo "=== BUILD SUMMARY ==="
           echo "Package: ${{ inputs.package }}"
           echo "Version: ${{ inputs.version }}"
+          echo "Wheel: ${{ env.WHEEL_FILENAME }}"
+          echo "Release: ${{ env.RELEASE_TAG }}"
+          echo "Status: BUILD_OK_RELEASE_DRAFT"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Validate wheel inside firebox:"
+          echo "     firebox run --net python-dev -- pip install <wheel-url>"
+          echo "  2. If validation passes, promote draft to real release"
+          echo "  3. Merge the PR with release-assets.jsonl update"
