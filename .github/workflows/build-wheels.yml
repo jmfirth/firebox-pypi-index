@@ -1,0 +1,53 @@
+name: Build and Release Wheels
+
+# Skeleton — not yet exercised. This workflow will build binary-extension
+# wheels from source against wasix-libc and attach them as GitHub Release
+# assets. The deploy-pages.yml workflow then regenerates the index to
+# include the new wheels.
+#
+# Reference: wasix-org/build-scripts (Makefile-driven wheel builds).
+# Our build will mirror their pattern:
+#   - wasixcc cross-compiler toolchain
+#   - wasi-sdk 22 sysroot
+#   - wasix-libc fork (jmfirth/wasix-libc, firebox-patches branch)
+#   - maturin for Rust-based packages (cryptography, bcrypt)
+#   - setuptools + wasixcc for C-extension packages (cffi, numpy)
+#
+# First wheel target: cryptography 47.0.0 + cffi >= 2.0.0 (M5.2 Option D).
+# Saturday Opus ships the first build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to build (e.g. cryptography, cffi)'
+        required: true
+        type: string
+      version:
+        description: 'Version to build (e.g. 47.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # to create releases and upload assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout build-scripts
+        uses: actions/checkout@v4
+
+      # TODO: Install wasixcc toolchain
+      # TODO: Checkout wasix-libc fork at pinned ref
+      # TODO: Build wheel via wasix-org/build-scripts Makefile pattern
+      # TODO: Create GH Release and upload wheel as asset
+      # TODO: Append entry to release-assets.jsonl
+      # TODO: Trigger deploy-pages.yml to regenerate index
+
+      - name: (placeholder) Build step
+        run: |
+          echo "build-wheels.yml is scaffolded but not yet exercised."
+          echo "First wheel build: cryptography 47.0.0 + cffi >= 2.0.0 (Saturday Opus)."
+          echo "Package: ${{ inputs.package }}"
+          echo "Version: ${{ inputs.version }}"
