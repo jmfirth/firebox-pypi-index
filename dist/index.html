@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>firebox-pypi-index — Python wheels for firebox</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 760px; margin: 2.5rem auto; padding: 0 1.5rem;
+    line-height: 1.6; color: #1a1a1a; background: #fafafa;
+  }
+  h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 0.25rem; }
+  .subtitle { color: #555; margin: 0 0 1.5rem; font-size: 0.95rem; }
+  h2 { font-size: 1.15rem; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+  p, li { margin: 0.4rem 0; }
+  code {
+    background: #e8e8e8; padding: 0.1em 0.35em; border-radius: 3px;
+    font-size: 0.9em; font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  }
+  pre {
+    background: #e8e8e8; padding: 0.75rem 1rem; border-radius: 5px;
+    overflow-x: auto; font-size: 0.85rem; line-height: 1.45;
+  }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid #d0d7de; margin: 2rem 0; }
+  .status { background: #ddf4ff; border-left: 4px solid #0969da; padding: 0.75rem 1rem; border-radius: 4px; margin: 1rem 0; }
+  .status strong { display: block; margin-bottom: 0.25rem; }
+  small { color: #656d76; }
+  ul { padding-left: 1.25rem; }
+  li { margin: 0.3rem 0; }
+  .endpoint { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<h1>firebox-pypi-index</h1>
+<p class="subtitle">Python wheels for <a href="https://github.com/jmfirth/firebox">firebox</a> — built against wasix-libc, served via GitHub Pages.</p>
+
+<div class="status">
+<strong>This index is operational.</strong>
+Packages hosted here are built specifically for firebox's wasm32-wasi runtime. For any package not yet hosted, pip automatically cascades to <a href="https://pythonindex.wasix.org/">wasix-extras</a> — no configuration needed.
+</div>
+
+<h2>Quick start</h2>
+<p>Inside a firebox <code>python-dev</code> image, pip is already configured. Just run:</p>
+<pre>pip install &lt;package&gt;</pre>
+<p>Outside firebox, or to use the index directly:</p>
+<pre>pip install \
+  --index-url https://pythonindex.firebox.run/simple/ \
+  --extra-index-url https://pythonindex.wasix.org/simple/ \
+  &lt;package&gt;</pre>
+
+<h2>PEP 503 simple repository</h2>
+<p class="endpoint"><a href="simple/">/simple/</a> — machine-readable package listing.</p>
+<p>Each package directory under <code>/simple/&lt;name&gt;/</code> contains an HTML page with links to every available wheel and source distribution, annotated with <code>sha256</code> digests. Tools like pip and uv consume this format directly.</p>
+
+<h2>How resolution works</h2>
+<ol>
+  <li><strong>firebox-pypi-index</strong> is checked first (<code>PIP_INDEX_URL</code>). If the package is hosted here, pip uses our wheel — built and tested against firebox's wasix-libc fork.</li>
+  <li><strong>wasix-extras</strong> is checked second (<code>PIP_EXTRA_INDEX_URL</code>). Wasix provides broad coverage of pure-Python and common binary-extension wheels for the wasm32-wasi platform.</li>
+  <li><strong>PyPI</strong> is checked last. Pure-Python wheels (py3-none-any) install directly; binary-extension wheels from PyPI target the host architecture and will not work inside firebox.</li>
+</ol>
+<p>This means <code>pip install cryptography</code> inside firebox resolves to our firebox-tuned wheel when present, falls through to wasix's build if ours is newer, and never tries to install a host-native wheel that would fail at runtime.</p>
+
+<h2>Wheel naming</h2>
+<p>Firebox-tuned wheels use <a href="https://peps.python.org/pep-0440/">PEP 440</a> local version identifiers so they coexist cleanly with upstream releases:</p>
+<pre>cryptography-47.0.0+firebox.1-cp313-cp313-wasix_wasm32.whl</pre>
+<p>Requesting <code>cryptography==47.0.0</code> resolves to <code>47.0.0+firebox.1</code> when present — pip treats the local suffix as a build variant of the same version, not a different release.</p>
+
+<h2>Architecture</h2>
+<ul>
+  <li><strong>Listings:</strong> PEP 503 HTML under <code>/simple/&lt;package&gt;/</code> — committed to this repo, served by GitHub Pages with Fastly CDN.</li>
+  <li><strong>Wheels:</strong> Stored as GitHub Releases assets. No repo-size penalty; scales indefinitely.</li>
+  <li><strong>Build CI:</strong> GitHub Actions workflow builds wheels from source and attaches them as release artifacts.</li>
+  <li><strong>Integrity:</strong> Every wheel URL includes a <code>sha256</code> digest. Pip verifies the download matches before installing.</li>
+</ul>
+
+<h2>Requesting a wheel</h2>
+<p>To request a new wheel or report a broken one, <a href="https://github.com/jmfirth/firebox/issues">file an issue</a> on the firebox project. Include the package name, the version you need, and whether you need it for the slim <code>python</code> image or the full <code>python-dev</code> image (with C/Rust build toolchain).</p>
+
+<hr>
+<small>firebox-pypi-index — © 2026 Justin Firth. All rights reserved.</small>
+</body>
+</html>
