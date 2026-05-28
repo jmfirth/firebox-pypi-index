@@ -1,0 +1,9 @@
+[project]
+name = "firebox-pypi-index"
+version = "0.1.0"
+description = "Firebox PyPI index — Python wheels for firebox's wasm32-wasi runtime"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "dumb-pypi>=1.15.0",
+]
