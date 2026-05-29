@@ -128,24 +128,39 @@ jobs:
           cd /tmp/cryptography-src
           git checkout ${{ inputs.version }}
 
-      - name: Apply wasix CC patch
+      - name: Apply wasix CC patch (best-effort; newer cryptography needs none)
         run: |
           cd /tmp/cryptography-src
-          # Patch build.rs to use CC env var instead of hardcoded wasixcc
-          # This mirrors wasix-org/build-scripts/patches/cryptography-0001-*.patch
-          patch -p1 << 'PATCH_EOF'
---- a/src/rust/cryptography-cffi/build.rs
-+++ b/src/rust/cryptography-cffi/build.rs
-@@ -61,7 +61,7 @@
+          # Patch build.rs to honor the CC env var instead of a hardcoded
+          # "wasixcc" compiler. Mirrors the upstream wasix patch
+          # wasix-org/build-scripts/patches/cryptography-0001-Allow-setting-the-compiler-via-the-CC-var.patch
+          # (Zebreus, commit 830b5f0).
+          #
+          # YAML correctness: the diff body is indented to live INSIDE this
+          # `run: |` block scalar. Lines at column 0 would terminate the block
+          # scalar and break workflow parsing (the original 0s-fail root cause).
+          # We strip the leading 10-space indent with `sed` before feeding the
+          # diff to `patch`.
+          #
+          # Applicability: cryptography 47.0.0's build.rs has no
+          # `build.compiler("wasixcc")` branch (the `cc` crate honors $CC
+          # natively there), so the hunk will NOT apply. Patch is therefore
+          # non-fatal; halt-on-failure still governs the real build steps below.
+          sed 's/^          //' > /tmp/cryptography-cc.patch << 'PATCH_EOF'
+          --- a/src/rust/cryptography-cffi/build.rs
+          +++ b/src/rust/cryptography-cffi/build.rs
+          @@ -61,7 +61,7 @@
 
-     let mut build = cc::Build::new();
-     if std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap() == "wasmer" {
--        build.compiler("wasixcc");
-+        build.compiler(&std::env::var("CC").unwrap_or("wasixcc".to_string()));
-     }
-     build
-         .file(openssl_c)
-PATCH_EOF
+               let mut build = cc::Build::new();
+               if std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap() == "wasmer" {
+          -        build.compiler("wasixcc");
+          +        build.compiler(&std::env::var("CC").unwrap_or("wasixcc".to_string()));
+               }
+               build
+                   .file(openssl_c)
+          PATCH_EOF
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/cryptography-cc.patch \
+            || echo "CC patch did not apply (expected for cryptography>=45; cc crate honors \$CC natively)"
 
       - name: Build cryptography wheel
         run: |
@@ -187,28 +202,33 @@ PATCH_EOF
 
       - name: Verify wheel contents
         run: |
-          python3 -c "
-import zipfile, sys
-w = '${{ env.WHEEL_PATH }}'
-with zipfile.ZipFile(w) as z:
-    names = z.namelist()
-    print('Wheel contents:')
-    for n in names:
-        print(f'  {n}')
-    # Check for native .so file
-    sos = [n for n in names if '.so' in n]
-    if not sos:
-        print('WARNING: no .so files in wheel — may be pure-Python')
-    else:
-        for so in sos:
-            data = z.read(so)
-            is_wasm = data[:4] == b'\\x00asm'
-            print(f'  {so}: {len(data)} bytes, WASM={is_wasm}')
-            if not is_wasm:
-                print(f'  ERROR: native module is not WASM format (magic: {data[:4].hex()})')
-                sys.exit(1)
-            print(f'  OK: native module is WASM format')
-"
+          # The verifier Python is indented to live INSIDE this `run: |` block
+          # scalar; column-0 lines would terminate the scalar and break workflow
+          # parsing (same bug class as the CC-patch step). We strip the leading
+          # 10-space indent with `sed` and run from a file rather than `-c`.
+          sed 's/^          //' > /tmp/verify_wheel.py << 'PY_EOF'
+          import zipfile, sys, os
+          w = os.environ["WHEEL_PATH"]
+          with zipfile.ZipFile(w) as z:
+              names = z.namelist()
+              print("Wheel contents:")
+              for n in names:
+                  print(f"  {n}")
+              # Check for native .so file
+              sos = [n for n in names if ".so" in n]
+              if not sos:
+                  print("WARNING: no .so files in wheel — may be pure-Python")
+              else:
+                  for so in sos:
+                      data = z.read(so)
+                      is_wasm = data[:4] == b"\x00asm"
+                      print(f"  {so}: {len(data)} bytes, WASM={is_wasm}")
+                      if not is_wasm:
+                          print(f"  ERROR: native module is not WASM format (magic: {data[:4].hex()})")
+                          sys.exit(1)
+                      print(f"  OK: native module is WASM format")
+          PY_EOF
+          WHEEL_PATH="${{ env.WHEEL_PATH }}" python3 /tmp/verify_wheel.py
 
       - name: Create GitHub Release (draft)
         run: |
